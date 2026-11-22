@@ -67,8 +67,17 @@ def friendly_error(exc: BaseException) -> str:
     return "Something went wrong: " + msg.replace("ERROR: ", "").splitlines()[0][:200]
 
 
+class _SilentLogger:
+    """Windowed (no-console) builds have no stderr; keep yt-dlp from writing to it."""
+
+    def debug(self, msg): pass
+    def info(self, msg): pass
+    def warning(self, msg): pass
+    def error(self, msg): pass
+
+
 def _base_opts() -> dict[str, Any]:
-    return {"quiet": True, "no_warnings": True, "noprogress": True, "noplaylist": True,
+    return {"logger": _SilentLogger(), "quiet": True, "no_warnings": True, "noprogress": True, "noplaylist": True,
             "ffmpeg_location": get_ffmpeg_dir(), "windowsfilenames": True}
 
 
