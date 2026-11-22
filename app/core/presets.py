@@ -74,15 +74,69 @@ CONVERT_PRESETS: dict[str, ConvertPreset] = {
 }
 
 
-def build_convert_args(preset: ConvertPreset, src: str, dst: str, quality: int | None = None) -> list[str]:
-    """ffmpeg arguments (without the ffmpeg binary itself)."""
-    args = ["-hide_banner", "-nostdin", "-y", "-i", src]
+# --- GPU encoders -------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class HwEncoder:
+    vendor: str                       # "nvenc" | "amf" | "qsv"
+    label: str                        # shown in the UI
+    encoder: str                      # ffmpeg encoder name
+    video_args: tuple[str, ...]
+    quality_flags: tuple[str, ...]    # each flag receives the quality value
+
+
+def _hw(vendor: str, label: str, codec: str, extra: tuple[str, ...] = ()) -> HwEncoder:
+    enc = f"{codec}_{vendor}"
+    if vendor == "nvenc":
+        args, flags = ("-c:v", enc, "-preset", "p5", "-rc", "vbr", "-b:v", "0", *extra), ("-cq",)
+    elif vendor == "amf":
+        args, flags = ("-c:v", enc, "-quality", "quality", "-rc", "cqp", *extra), ("-qp_i", "-qp_p", "-qp_b")
+    else:  # qsv
+        args, flags = ("-c:v", enc, "-preset", "medium", *extra), ("-global_quality",)
+    return HwEncoder(vendor, label, enc, args + ("-pix_fmt", "yuv420p") if codec != "av1" else args, flags)
+
+
+_VENDORS = (("nvenc", "NVIDIA NVENC"), ("amf", "AMD AMF"), ("qsv", "Intel Quick Sync"))
+
+# Priority order per preset. VP9 and MP3 have no practical GPU encoders -> CPU only.
+HW_ENCODERS: dict[str, list[HwEncoder]] = {
+    "h264": [_hw(v, l, "h264") for v, l in _VENDORS],
+    "h265": [_hw(v, l, "hevc", ("-tag:v", "hvc1")) for v, l in _VENDORS],
+    "av1": [_hw(v, l, "av1") for v, l in _VENDORS],
+}
+ALL_HW_ENCODER_NAMES = sorted({e.encoder for lst in HW_ENCODERS.values() for e in lst})
+VENDOR_LABELS = dict(_VENDORS)
+
+
+def pick_hw(preset_key: str, working: set[str], choice: str = "auto") -> HwEncoder | None:
+    """choice: "auto" (best working GPU), "cpu" (never), or a vendor key."""
+    if choice == "cpu":
+        return None
+    for enc in HW_ENCODERS.get(preset_key, []):
+        if enc.encoder in working and choice in ("auto", enc.vendor):
+            return enc
+    return None
+
+
+def build_convert_args(preset: ConvertPreset, src: str, dst: str, quality: int | None = None,
+                       hw: HwEncoder | None = None) -> list[str]:
+    """ffmpeg arguments (without the ffmpeg binary itself). `hw` switches the video encoder to a GPU one."""
+    use_hw = hw is not None and preset.has_video
+    args = ["-hide_banner", "-nostdin", "-y"]
+    if use_hw:
+        args += ["-hwaccel", "auto"]      # GPU decode when possible (e.g. AV1 sources); falls back to CPU
+    args += ["-i", src]
+    q = preset.default_quality if quality is None else quality
     if preset.has_video:
         args += ["-map", "0:v:0", "-map", "0:a?"]
-        args += list(preset.video_args)
-        if preset.quality_flag:
-            q = preset.default_quality if quality is None else quality
-            args += [preset.quality_flag, str(q)]
+        if use_hw:
+            args += list(hw.video_args)
+            for flag in hw.quality_flags:
+                args += [flag, str(q)]
+        else:
+            args += list(preset.video_args)
+            if preset.quality_flag:
+                args += [preset.quality_flag, str(q)]
     else:
         args += ["-vn"]
     args += list(preset.audio_args)

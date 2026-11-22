@@ -6,12 +6,16 @@ from tkinter import filedialog
 import customtkinter as ctk
 
 from app.core import converter as cv
-from app.core.presets import CONVERT_PRESETS, ConvertPreset
+from app.core.presets import CONVERT_PRESETS, HW_ENCODERS, VENDOR_LABELS, ConvertPreset, pick_hw
 from app.core.utils import Settings, fmt_duration, open_folder
 from app.core.worker import Worker
 
 VIDEO_TYPES = [("Video / audio files", "*.mp4 *.mkv *.webm *.mov *.avi *.flv *.wmv *.m4v *.ts *.mpg *.mpeg *.3gp *.mp3 *.m4a *.opus *.wav *.flac *.ogg"),
                ("All files", "*.*")]
+
+
+AUTO_LABEL = "Auto (GPU if available)"
+CPU_LABEL = "CPU (software)"
 
 
 class ConvertPage(ctk.CTkFrame):
@@ -22,6 +26,9 @@ class ConvertPage(ctk.CTkFrame):
         self.task = None
         self.result_path = ""
         self._labels = {p.label: p for p in CONVERT_PRESETS.values()}
+        self.working_hw: set[str] = set()
+        self._hw_detected = False
+        self._enc_choices = {AUTO_LABEL: "auto", CPU_LABEL: "cpu"}
 
         ctk.CTkLabel(self, text="Convert Video", font=ctk.CTkFont(size=22, weight="bold")).pack(padx=28, pady=(28, 12), anchor="w")
         row = ctk.CTkFrame(self, fg_color="transparent")
@@ -43,6 +50,20 @@ class ConvertPage(ctk.CTkFrame):
         self._build_done()
         self._sections = [self.info_box, self.options_box, self.progress_box, self.done_box]
         self._show()
+        self.worker.submit(lambda _t: cv.detect_working_hw_encoders(), on_result=self._on_hw_detected,
+                           on_error=lambda _e: self._on_hw_detected(set()))
+
+    def _on_hw_detected(self, working: set[str]) -> None:
+        self.working_hw = working
+        self._hw_detected = True
+        vendors = [v for v in VENDOR_LABELS if any(e.vendor == v and e.encoder in working
+                                                   for lst in HW_ENCODERS.values() for e in lst)]
+        for v in vendors:
+            self._enc_choices[f"GPU only: {VENDOR_LABELS[v]}"] = v
+        self.encoder_menu.configure(values=list(self._enc_choices))
+        saved = self.settings.get("convert_encoder", AUTO_LABEL)
+        self.encoder_menu.set(saved if saved in self._enc_choices else AUTO_LABEL)
+        self._sync_preset()
 
     def _build_options(self) -> None:
         box = self.options_box = ctk.CTkFrame(self)
@@ -63,9 +84,17 @@ class ConvertPage(ctk.CTkFrame):
         self.quality_value = ctk.CTkLabel(q, text="")
         self.quality_value.pack(side="left", padx=10)
 
-        ctk.CTkLabel(grid, text="Save to").grid(row=2, column=0, sticky="w", pady=6)
+        ctk.CTkLabel(grid, text="Encoder").grid(row=2, column=0, sticky="w", pady=6)
+        enc = ctk.CTkFrame(grid, fg_color="transparent")
+        enc.grid(row=2, column=1, sticky="ew", padx=14)
+        self.encoder_menu = ctk.CTkOptionMenu(enc, values=list(self._enc_choices), width=230)
+        self.encoder_menu.pack(side="left")
+        self.encoder_hint = ctk.CTkLabel(enc, text="Detecting GPU encoders...", text_color=("gray30", "gray70"))
+        self.encoder_hint.pack(side="left", padx=10)
+
+        ctk.CTkLabel(grid, text="Save to").grid(row=3, column=0, sticky="w", pady=6)
         folder = ctk.CTkFrame(grid, fg_color="transparent")
-        folder.grid(row=2, column=1, sticky="ew", padx=14)
+        folder.grid(row=3, column=1, sticky="ew", padx=14)
         self.folder_entry = ctk.CTkEntry(folder, placeholder_text="Same folder as the original")
         self.folder_entry.pack(side="left", fill="x", expand=True)
         ctk.CTkButton(folder, text="Browse", width=80, command=self._browse).pack(side="left", padx=(8, 0))
@@ -112,6 +141,17 @@ class ConvertPage(ctk.CTkFrame):
 
     def _sync_preset(self) -> None:
         p = self.preset
+        gpu = [e for e in HW_ENCODERS.get(p.key, []) if e.encoder in self.working_hw]
+        if p.key not in HW_ENCODERS:
+            self.encoder_menu.configure(state="disabled")
+            self.encoder_hint.configure(text="This format is always encoded on the CPU")
+        else:
+            self.encoder_menu.configure(state="normal")
+            if gpu:
+                text = f"GPU available: {gpu[0].label}"
+            else:
+                text = "No supported GPU encoder found - using CPU" if self._hw_detected else "Detecting GPU encoders..."
+            self.encoder_hint.configure(text=text)
         if p.quality_flag:
             lo, hi = p.quality_range
             self.quality_slider.configure(from_=lo, to=hi, number_of_steps=hi - lo)
@@ -124,7 +164,7 @@ class ConvertPage(ctk.CTkFrame):
             self.quality_slider.master.grid_remove()
 
     def _on_quality(self, value: float) -> None:
-        self.quality_value.configure(text=f"CRF {int(round(value))}  (lower = better quality, bigger file)")
+        self.quality_value.configure(text=f"{int(round(value))}  (lower = better quality, bigger file)")
 
     def _browse(self) -> None:
         path = filedialog.askdirectory()
@@ -167,7 +207,9 @@ class ConvertPage(ctk.CTkFrame):
         if p.has_video and not self.media.video_codec:
             self._set_status("This file has no video stream; choose the audio-only option.", error=True)
             return
-        self.settings.update(convert_preset=p.key)
+        choice_label = self.encoder_menu.get()
+        self.settings.update(convert_preset=p.key, convert_encoder=choice_label)
+        hw = pick_hw(p.key, self.working_hw, self._enc_choices.get(choice_label, "auto"))
         quality = int(round(self.quality_slider.get())) if p.quality_flag else None
         src, duration = self.media.path, self.media.duration
         out_dir = self.folder_entry.get().strip() or None
@@ -176,17 +218,18 @@ class ConvertPage(ctk.CTkFrame):
         self.progress_label.configure(text="Starting...")
         self.progress_bar.set(0)
         self._show(self.info_box, self.progress_box)
-        self.task = self.worker.submit(lambda t: cv.convert(src, dst, p, quality, duration, t.progress, t.cancelled),
+        self.task = self.worker.submit(lambda t: cv.convert_auto(src, dst, p, quality, duration, t.progress, t.cancelled, hw),
                                        on_result=self._on_done, on_error=self._on_error, on_progress=self._on_progress)
 
     def _on_progress(self, pr: cv.ConvertProgress) -> None:
         self.progress_label.configure(text=f"Converting: {pr.percent:.0f}%" + (f"  -  {pr.speed}" if pr.speed else ""))
         self.progress_bar.set(pr.percent / 100)
 
-    def _on_done(self, path: str) -> None:
+    def _on_done(self, result: tuple[str, str]) -> None:
+        path, encoder = result
         self.task = None
         self.result_path = path
-        self.done_label.configure(text=f"Done! Saved to:\n{path}")
+        self.done_label.configure(text=f"Done! Saved to:\n{path}\nEncoder used: {encoder}")
         self._show(self.info_box, self.done_box)
 
     def _on_error(self, exc: BaseException) -> None:
