@@ -17,7 +17,9 @@ def selftest() -> int:
 def main() -> int:
     if "--selftest" in sys.argv:
         return selftest()
-    # UI is added in a later milestone.
+    from app.ui.app_window import AppWindow
+
+    AppWindow().mainloop()
     return 0
 
 
