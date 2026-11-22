@@ -1,4 +1,4 @@
-name: Build
+name: CI
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-windows:
+  test:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,9 +19,32 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: python scripts/fetch_ffmpeg.py
       - run: python -m pytest -q
+
+  # Only when code lands on main (or is run manually): build the portable exe.
+  build:
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: python scripts/fetch_ffmpeg.py
       - run: pyinstaller yt_downloader.spec --noconfirm
-      - name: Smoke-test built exe (bundled ffmpeg, no system ffmpeg)
+      - name: Smoke-test built exe (bundled ffmpeg + GUI, no system ffmpeg)
         shell: pwsh
         run: |
           $p = Start-Process -FilePath dist/YTDownloader/YTDownloader.exe -ArgumentList "--selftest" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "selftest failed with exit code $($p.ExitCode)" }
+      - name: Zip portable app
+        shell: pwsh
+        run: Compress-Archive -Path dist/YTDownloader -DestinationPath YTDownloader-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YTDownloader-windows-x64
+          path: YTDownloader-windows-x64.zip
+          if-no-files-found: error
