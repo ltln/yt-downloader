@@ -28,7 +28,7 @@ pyinstaller yt_downloader.spec        # portable build -> dist/YTDownloader/
 
 On non-Windows dev machines, point `FFMPEG_DIR` at a folder containing an `ffmpeg` binary (dev only; shipped builds only use the bundled copy).
 
-CI (`.github/workflows/build.yml`) builds the Windows app on every PR and push to `main`, runs the tests and smoke-tests the built exe. It does not publish artifacts.
+CI (`.github/workflows/build.yml`): pull requests run the tests only (no build). When code lands on `main`, CI also builds the portable Windows exe, smoke-tests it and uploads `YTDownloader-windows-x64.zip` as a workflow artifact.
 
 ## Notes
 
