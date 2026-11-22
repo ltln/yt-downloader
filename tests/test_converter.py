@@ -93,3 +93,64 @@ def test_convert_failure_message(tmp_path):
     bad.write_text("not media")
     with pytest.raises(cv.ConvertFailed):
         cv.convert(str(bad), str(tmp_path / "o.mp4"), CONVERT_PRESETS["h264"], None, 1.0)
+
+
+# ---- GPU encoding ------------------------------------------------------------------------
+
+from app.core.presets import HW_ENCODERS, build_convert_args, pick_hw  # noqa: E402
+
+
+def test_pick_hw_priority_and_choice():
+    working = {"h264_amf", "h264_qsv"}
+    assert pick_hw("h264", working).vendor == "amf"            # nvenc not working -> next in priority
+    assert pick_hw("h264", working, "qsv").vendor == "qsv"
+    assert pick_hw("h264", working, "cpu") is None
+    assert pick_hw("h264", set()) is None
+    assert pick_hw("vp9", {"h264_nvenc"}) is None               # no GPU variant for VP9
+    assert pick_hw("av1", {"av1_nvenc"}).encoder == "av1_nvenc"
+
+
+def test_hw_args_nvenc_amf_qsv():
+    p = CONVERT_PRESETS["h264"]
+    nv = build_convert_args(p, "i.mkv", "o.mp4", 21, HW_ENCODERS["h264"][0])
+    assert nv[nv.index("-c:v") + 1] == "h264_nvenc" and nv[nv.index("-cq") + 1] == "21"
+    assert "-hwaccel" in nv and nv.index("-hwaccel") < nv.index("-i") and "libx264" not in nv
+    amf = build_convert_args(p, "i.mkv", "o.mp4", 21, HW_ENCODERS["h264"][1])
+    assert [amf[amf.index(f) + 1] for f in ("-qp_i", "-qp_p", "-qp_b")] == ["21"] * 3
+    qsv = build_convert_args(CONVERT_PRESETS["h265"], "i.mkv", "o.mp4", 25, HW_ENCODERS["h265"][2])
+    assert "hevc_qsv" in qsv and qsv[qsv.index("-global_quality") + 1] == "25" and "hvc1" in qsv
+
+
+def test_software_args_unchanged_without_hw():
+    a = build_convert_args(CONVERT_PRESETS["h264"], "i", "o.mp4", 20)
+    assert "libx264" in a and "-hwaccel" not in a
+
+
+def test_convert_auto_falls_back_to_cpu(monkeypatch):
+    calls = []
+
+    def fake(src, dst, preset, q, dur, prog=None, cancel=None, hw=None):
+        calls.append(hw)
+        if hw is not None:
+            raise cv.ConvertFailed("gpu boom")
+        return dst
+    monkeypatch.setattr(cv, "convert", fake)
+    hw = HW_ENCODERS["h264"][0]
+    assert cv.convert_auto("i", "o", CONVERT_PRESETS["h264"], None, 1.0, hw=hw) == ("o", "CPU")
+    assert calls == [hw, None]
+    calls.clear()
+    assert cv.convert_auto("i", "o", CONVERT_PRESETS["h264"], None, 1.0) == ("o", "CPU") and calls == [None]
+
+
+def test_convert_auto_does_not_swallow_cancel(monkeypatch):
+    def fake(*a, **k):
+        raise cv.ConvertCancelled()
+    monkeypatch.setattr(cv, "convert", fake)
+    with pytest.raises(cv.ConvertCancelled):
+        cv.convert_auto("i", "o", CONVERT_PRESETS["h264"], None, 1.0, hw=HW_ENCODERS["h264"][0])
+
+
+def test_detect_hw_returns_set_and_never_crashes():
+    _ffmpeg_or_skip()
+    res = cv.detect_working_hw_encoders()
+    assert isinstance(res, set)           # empty on machines without a supported GPU (e.g. CI)

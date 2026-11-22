@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable
 
 from app.core.ffmpeg_locator import get_ffmpeg
-from app.core.presets import ConvertPreset, build_convert_args
+from app.core.presets import (ALL_HW_ENCODER_NAMES, ConvertPreset, HwEncoder, build_convert_args)
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -101,9 +101,9 @@ def unique_output_path(src: str, preset: ConvertPreset, out_dir: str | None = No
 
 def convert(src: str, dst: str, preset: ConvertPreset, quality: int | None, duration: float | None,
             on_progress: Callable[[ConvertProgress], None] | None = None,
-            cancel: threading.Event | None = None) -> str:
+            cancel: threading.Event | None = None, hw: HwEncoder | None = None) -> str:
     """Run ffmpeg. Returns dst. Raises ConvertCancelled / ConvertFailed."""
-    cmd = [get_ffmpeg(), *build_convert_args(preset, src, dst, quality)]
+    cmd = [get_ffmpeg(), *build_convert_args(preset, src, dst, quality, hw)]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                             encoding="utf-8", errors="replace", creationflags=_NO_WINDOW)
     tail: collections.deque[str] = collections.deque(maxlen=8)
@@ -136,3 +136,45 @@ def convert(src: str, dst: str, preset: ConvertPreset, quality: int | None, dura
     if on_progress:
         on_progress(ConvertProgress(100.0, speed))
     return dst
+
+
+def convert_auto(src: str, dst: str, preset: ConvertPreset, quality: int | None, duration: float | None,
+                 on_progress: Callable[[ConvertProgress], None] | None = None,
+                 cancel: threading.Event | None = None, hw: HwEncoder | None = None) -> tuple[str, str]:
+    """Convert with the GPU encoder if given; on failure transparently retry on the CPU.
+
+    Returns (dst, encoder label used).
+    """
+    if hw is not None:
+        try:
+            return convert(src, dst, preset, quality, duration, on_progress, cancel, hw), hw.label
+        except ConvertFailed:
+            pass  # GPU encode failed (driver, unsupported input, ...) -> software fallback below
+    return convert(src, dst, preset, quality, duration, on_progress, cancel), "CPU"
+
+
+def detect_working_hw_encoders(timeout: int = 20) -> set[str]:
+    """Return GPU encoder names that actually work on this machine.
+
+    The bundled ffmpeg lists every GPU encoder it was compiled with, even without that GPU, so each
+    candidate is test-encoded (one tiny frame) before being offered.
+    """
+    try:
+        ff = get_ffmpeg()
+        listing = subprocess.run([ff, "-hide_banner", "-encoders"], capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace", creationflags=_NO_WINDOW, timeout=timeout).stdout
+    except (OSError, subprocess.SubprocessError, FileNotFoundError):
+        return set()
+    working: set[str] = set()
+    for name in ALL_HW_ENCODER_NAMES:
+        if name not in listing:
+            continue
+        try:
+            r = subprocess.run([ff, "-hide_banner", "-nostdin", "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.2",
+                                "-frames:v", "1", "-c:v", name, "-f", "null", "-"], capture_output=True,
+                               creationflags=_NO_WINDOW, timeout=timeout)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if r.returncode == 0:
+            working.add(name)
+    return working

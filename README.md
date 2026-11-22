@@ -11,7 +11,7 @@ ffmpeg is bundled inside the app. Downloading/extraction is done with [yt-dlp](h
 
 1. Unzip the build folder anywhere and run `YTDownloader.exe` (Windows may show a SmartScreen warning for unsigned apps: *More info -> Run anyway*).
 2. **YT Download** (left sidebar): paste a URL -> *Fetch* -> choose Video/Audio, quality, format, folder -> *Download*.
-3. **Convert Video**: *Choose file* -> pick a target preset and quality -> *Convert*. Output goes next to the original (`name_h264.mp4`) unless you choose a folder; existing files are never overwritten.
+3. **Convert Video** (GPU-accelerated when possible: NVIDIA NVENC, AMD AMF or Intel Quick Sync are auto-detected for H.264/H.265/AV1; otherwise it uses the CPU. If a GPU encode fails it retries on the CPU automatically): *Choose file* -> pick a target preset and quality -> *Convert*. Output goes next to the original (`name_h264.mp4`) unless you choose a folder; existing files are never overwritten.
 
 Settings are stored in `settings.json` next to the exe (or in `%APPDATA%\YTDownloader` if that folder is read-only).
 
