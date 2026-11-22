@@ -1,4 +1,4 @@
-"""Locate the bundled ffmpeg/ffprobe binaries (never relies on the user's PATH in shipped builds)."""
+"""Locate the bundled ffmpeg binary (never relies on the user's PATH in shipped builds)."""
 from __future__ import annotations
 
 import os
@@ -38,10 +38,6 @@ def get_ffmpeg() -> str:
     return _find("ffmpeg")
 
 
-def get_ffprobe() -> str:
-    return _find("ffprobe")
-
-
 def get_ffmpeg_dir() -> str:
-    """Directory containing ffmpeg/ffprobe, suitable for yt-dlp's `ffmpeg_location`."""
+    """Directory containing ffmpeg, suitable for yt-dlp's `ffmpeg_location`."""
     return str(Path(get_ffmpeg()).parent)

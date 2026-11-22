@@ -1,4 +1,4 @@
-"""Download a static Windows ffmpeg build and place ffmpeg.exe/ffprobe.exe in app/resources/bin/windows."""
+"""Download a static Windows ffmpeg build and place ffmpeg.exe in app/resources/bin/windows."""
 from __future__ import annotations
 
 import io
@@ -10,7 +10,7 @@ from pathlib import Path
 URL = ("https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
        "ffmpeg-master-latest-win64-gpl.zip")
 DEST = Path(__file__).resolve().parent.parent / "app" / "resources" / "bin" / "windows"
-WANTED = {"ffmpeg.exe", "ffprobe.exe"}
+WANTED = {"ffmpeg.exe"}
 
 
 def main() -> int:
