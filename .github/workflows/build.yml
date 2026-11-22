@@ -40,11 +40,9 @@ jobs:
         run: |
           $p = Start-Process -FilePath dist/YTDownloader/YTDownloader.exe -ArgumentList "--selftest" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "selftest failed with exit code $($p.ExitCode)" }
-      - name: Zip portable app
-        shell: pwsh
-        run: Compress-Archive -Path dist/YTDownloader -DestinationPath YTDownloader-windows-x64.zip
+      # upload-artifact zips the folder itself, so don't pre-zip (that gives a zip inside a zip).
       - uses: actions/upload-artifact@v4
         with:
           name: YTDownloader-windows-x64
-          path: YTDownloader-windows-x64.zip
+          path: dist/YTDownloader/
           if-no-files-found: error
