@@ -66,14 +66,27 @@ class Settings:
             pass
 
 
+def explorer_select_command(path: str) -> str:
+    """Command line that makes Windows Explorer open the folder with `path` selected.
+
+    Explorer needs `/select,"<path>"` with quotes around the path only, and backslashes. Passing it
+    as a list to subprocess wraps the whole `/select,<path>` token in quotes when the path contains
+    spaces, which Explorer can't parse (it then opens a default folder such as Documents).
+    """
+    return f'explorer /select,"{os.path.normpath(path).replace("/", chr(92))}"'
+
+
 def open_folder(path: str, select_file: bool = False) -> None:
-    p = Path(path)
+    """Open the folder containing `path` (or `path` itself if it is a folder), selecting the file if asked."""
+    p = Path(os.path.normpath(path)) if path else Path.home()
+    is_file = p.is_file()
+    folder = p if p.is_dir() else p.parent
     if sys.platform == "win32":
-        if select_file and p.exists():
-            subprocess.Popen(["explorer", f"/select,{p}"])
+        if select_file and is_file:
+            subprocess.Popen(explorer_select_command(str(p)))   # string on purpose, see above
         else:
-            os.startfile(str(p if p.is_dir() else p.parent))  # noqa: S606
+            os.startfile(str(folder))  # noqa: S606
     elif sys.platform == "darwin":
-        subprocess.Popen(["open", "-R", str(p)] if select_file and p.exists() else ["open", str(p if p.is_dir() else p.parent)])
+        subprocess.Popen(["open", "-R", str(p)] if select_file and is_file else ["open", str(folder)])
     else:
-        subprocess.Popen(["xdg-open", str(p if p.is_dir() else p.parent)])
+        subprocess.Popen(["xdg-open", str(folder)])
